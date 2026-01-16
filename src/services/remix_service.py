@@ -3,7 +3,7 @@ import logging
 import subprocess
 import shutil
 
-logger = logging.getLogger("Autoplex.RemixService")
+logger = logging.getLogger("Autoalex.RemixService")
 
 VALID_STEMS = ["bass", "drums", "vocals", "other"]
 DEFAULT_GAIN_DB = 4

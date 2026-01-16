@@ -1,6 +1,6 @@
-# Autoplex Commands
+# Autoalex Commands
 
-Prefix: `!plex`
+Prefix: `!alex`
 
 ## Stats
 - `usage` - active Plex streams
@@ -18,7 +18,7 @@ Stems: `bass` `drums` `vocals` `other`
 - `reduce [stem] [dB?] "Song"` - attenuate stem (default -4dB)
 
 ```
-!plex boost bass "Billie Jean"
-!plex boost vocals 8 "Halo"
-!plex reduce bass 60 "Song"      # backing track (removes bass)
+!alex boost bass "Billie Jean"
+!alex boost vocals 8 "Halo"
+!alex reduce bass 60 "Song"      # backing track (removes bass)
 ```

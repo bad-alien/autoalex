@@ -7,7 +7,7 @@ from io import BytesIO
 from clients import clients
 from config import Config
 
-logger = logging.getLogger("Autoplex.PlexService")
+logger = logging.getLogger("Autoalex.PlexService")
 
 class PlexService:
     def __init__(self):
@@ -316,7 +316,7 @@ class PlexService:
             # For this MVP, we will append the "Artist Credit" string and 
             # the disambiguation if available.
             
-            enrichment_text = f"\n\n[Autoplex] MusicBrainz Identified: {details['release']['title']}"
+            enrichment_text = f"\n\n[Autoalex] MusicBrainz Identified: {details['release']['title']}"
             if 'date' in details['release']:
                 enrichment_text += f" ({details['release']['date']})"
             
@@ -340,7 +340,7 @@ class PlexService:
             
             # 4. Update Plex Summary
             current_summary = target_album.summary or ""
-            if "[Autoplex]" not in current_summary:
+            if "[Autoalex]" not in current_summary:
                 new_summary = current_summary + enrichment_text
                 target_album.edit(**{'summary': new_summary})
                 target_album.reload()

@@ -14,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("Autoplex")
+logger = logging.getLogger("Autoalex")
 
 # Validate Config
 try:
@@ -31,7 +31,7 @@ remix_service = RemixService()
 # Initialize Bot
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!plex ", intents=intents)
+bot = commands.Bot(command_prefix="!alex ", intents=intents)
 
 @bot.event
 async def on_ready():
@@ -46,7 +46,7 @@ async def on_ready():
     # Initialize MusicBrainz
     clients.initialize_musicbrainz()
     
-    logger.info('Autoplex is ready to serve.')
+    logger.info('Autoalex is ready to serve.')
 
 @bot.event
 async def on_message(message):
@@ -98,7 +98,7 @@ async def usage(ctx):
 async def completion(ctx, artist_name: str, user: str = None):
     """
     Calculates percentage of artist's discography played.
-    Usage: !plex completion "Aphex Twin" [username]
+    Usage: !alex completion "Aphex Twin" [username]
     """
     await ctx.typing()
 
@@ -218,7 +218,7 @@ async def sync_top(ctx):
 async def enrich(ctx, *, query: str):
     """
     Enriches an album's metadata from MusicBrainz.
-    Usage: !plex enrich Kind of Blue
+    Usage: !alex enrich Kind of Blue
     """
     await ctx.typing()
     try:
@@ -235,7 +235,7 @@ async def enrich(ctx, *, query: str):
 async def compare(ctx, artist_name: str, user1: str, user2: str):
     """
     Compares two users' progress for an artist.
-    Usage: !plex compare "Aphex Twin" user1 user2
+    Usage: !alex compare "Aphex Twin" user1 user2
     """
     await ctx.typing()
     
@@ -315,7 +315,7 @@ def parse_remix_args(args: str) -> tuple[str, float, str]:
     parts = args.split(maxsplit=2)
 
     if len(parts) < 2:
-        raise ValueError("Usage: `!plex boost/reduce [stem] [dB?] \"Song Title\"`")
+        raise ValueError("Usage: `!alex boost/reduce [stem] [dB?] \"Song Title\"`")
 
     stem = parts[0].lower()
 
@@ -413,8 +413,8 @@ async def _process_remix(ctx, stem: str, gain_db: float, song_title: str, action
 async def boost(ctx, *, args: str):
     """
     Boosts a stem (bass, drums, vocals, other) in a track using AI.
-    Usage: !plex boost bass "Billie Jean"
-           !plex boost vocals 8 "Halo"
+    Usage: !alex boost bass "Billie Jean"
+           !alex boost vocals 8 "Halo"
     """
     try:
         stem, gain_db, song_title = parse_remix_args(args)
@@ -429,8 +429,8 @@ async def boost(ctx, *, args: str):
 async def reduce(ctx, *, args: str):
     """
     Reduces a stem (bass, drums, vocals, other) in a track using AI.
-    Usage: !plex reduce drums "In the Air Tonight"
-           !plex reduce vocals 10 "Song Title"
+    Usage: !alex reduce drums "In the Air Tonight"
+           !alex reduce vocals 10 "Song Title"
     """
     try:
         stem, gain_db, song_title = parse_remix_args(args)

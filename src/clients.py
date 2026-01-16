@@ -3,7 +3,7 @@ import musicbrainzngs
 from config import Config
 import logging
 
-logger = logging.getLogger("Autoplex.Clients")
+logger = logging.getLogger("Autoalex.Clients")
 
 class Clients:
     def __init__(self):

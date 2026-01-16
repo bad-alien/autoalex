@@ -12,7 +12,7 @@ class Config:
     TAUTULLI_URL = os.getenv("TAUTULLI_URL")
     TAUTULLI_API_KEY = os.getenv("TAUTULLI_API_KEY")
     
-    MUSICBRAINZ_APP_NAME = os.getenv("MUSICBRAINZ_APP_NAME", "Autoplex")
+    MUSICBRAINZ_APP_NAME = os.getenv("MUSICBRAINZ_APP_NAME", "Autoalex")
     MUSICBRAINZ_APP_VERSION = os.getenv("MUSICBRAINZ_APP_VERSION", "0.1.0")
     MUSICBRAINZ_CONTACT = os.getenv("MUSICBRAINZ_CONTACT", "")
 

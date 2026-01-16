@@ -2,7 +2,7 @@ import aiohttp
 import logging
 from config import Config
 
-logger = logging.getLogger("Autoplex.TautulliService")
+logger = logging.getLogger("Autoalex.TautulliService")
 
 class TautulliService:
     def __init__(self):
