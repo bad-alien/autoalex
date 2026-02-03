@@ -676,6 +676,133 @@ async def added(ctx, days: int = 7, user: str = None):
     await ctx.send(embed=embed)
 
 
+@bot.group(name="recent-raves", invoke_without_command=True)
+async def recent_raves(ctx):
+    """
+    Manages the shared 'Recent Raves' playlist.
+    Subcommands: update
+    """
+    await ctx.send("Usage: `!alex recent-raves update`")
+
+@recent_raves.command(name="update")
+async def recent_raves_update(ctx):
+    """
+    Updates the 'Recent Raves' playlist with latest 5-star tracks.
+    Contributors: WHS.IV, jac7k, rakbarut, Casey Stewart
+    Adds new tracks to each contributor's playlist (max 50).
+    """
+    await ctx.typing()
+
+    contributors = ["WHS.IV", "jac7k", "rakbarut", "Casey Stewart"]
+
+    try:
+        result = await asyncio.to_thread(
+            plex_service.update_recent_raves,
+            contributors=contributors
+        )
+
+        if result['total'] == 0:
+            await ctx.send("⚠️ No 5-star tracks found from contributors.")
+            return
+
+        # Build embed with track list
+        if result['added'] > 0:
+            title = f"Recent Raves Updated (+{result['added']} new)"
+            color = discord.Color.green()
+        else:
+            title = "Recent Raves (up to date)"
+            color = discord.Color.blue()
+
+        embed = discord.Embed(title=title, color=color)
+
+        # Format track list (Discord has 4096 char limit for description)
+        track_lines = []
+        for i, t in enumerate(result['tracks'], 1):
+            # Truncate long titles/artists
+            title_str = t['title'][:30] + '..' if len(t['title']) > 32 else t['title']
+            artist_str = t['artist'][:18] + '..' if len(t['artist']) > 20 else t['artist']
+            line = f"`{i:2}.` **{title_str}** - {artist_str} ({t['user'][:8]})"
+            track_lines.append(line)
+
+        # Split into chunks if needed (embed field limit is 1024 chars)
+        chunk_size = 10
+        for chunk_idx in range(0, len(track_lines), chunk_size):
+            chunk = track_lines[chunk_idx:chunk_idx + chunk_size]
+            field_name = f"Tracks {chunk_idx + 1}-{min(chunk_idx + chunk_size, len(track_lines))}"
+            embed.add_field(name=field_name, value="\n".join(chunk), inline=False)
+
+        embed.set_footer(text=f"{result['total']} tracks total • 5-star ratings only")
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Recent Raves update failed: {e}")
+        await ctx.send(f"❌ Update failed: {e}")
+
+
+@bot.group(name="jam-jar", invoke_without_command=True)
+async def jam_jar(ctx):
+    """
+    Manages the shared 'Jam Jar' collaborative playlist.
+    Subcommands: sync
+    """
+    await ctx.send("Usage: `!alex jam-jar sync`")
+
+@jam_jar.command(name="sync")
+async def jam_jar_sync(ctx):
+    """
+    Syncs the 'Jam Jar' playlist across all members.
+    Merges tracks from all members, deduplicates, and pushes to everyone.
+    Members: WHS.IV, jac7k, rakbarut, Casey Stewart
+    """
+    await ctx.typing()
+
+    members = ["WHS.IV", "jac7k", "rakbarut", "Casey Stewart"]
+
+    try:
+        result = await asyncio.to_thread(
+            plex_service.sync_jam_jar,
+            members=members
+        )
+
+        if result['total'] == 0:
+            await ctx.send("Jam Jar is empty. Add some tracks and sync again.")
+            return
+
+        # Build embed with track list
+        embed = discord.Embed(
+            title="Jam Jar Synced",
+            description=f"Merged playlist across {len(members)} members",
+            color=discord.Color.purple()
+        )
+
+        # Format track list
+        track_lines = []
+        for i, t in enumerate(result['tracks'], 1):
+            title_str = t['title'][:30] + '..' if len(t['title']) > 32 else t['title']
+            artist_str = t['artist'][:18] + '..' if len(t['artist']) > 20 else t['artist']
+            line = f"`{i:2}.` **{title_str}** - {artist_str} ({t['user'][:8]})"
+            track_lines.append(line)
+
+        # Split into chunks (embed field limit is 1024 chars)
+        chunk_size = 10
+        for chunk_idx in range(0, min(len(track_lines), 50), chunk_size):  # Show max 50
+            chunk = track_lines[chunk_idx:chunk_idx + chunk_size]
+            field_name = f"Tracks {chunk_idx + 1}-{chunk_idx + len(chunk)}"
+            embed.add_field(name=field_name, value="\n".join(chunk), inline=False)
+
+        if len(track_lines) > 50:
+            embed.add_field(name="...", value=f"And {len(track_lines) - 50} more tracks", inline=False)
+
+        embed.set_footer(text=f"{result['total']} tracks total")
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Jam Jar sync failed: {e}")
+        await ctx.send(f"Jam Jar sync failed: {e}")
+
+
 if __name__ == "__main__":
     try:
         bot.run(Config.DISCORD_TOKEN)

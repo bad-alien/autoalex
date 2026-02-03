@@ -505,3 +505,233 @@ class PlexService:
             return total_size
         except Exception:
             return 0
+
+    def update_recent_raves(self, contributors: list[str], max_songs: int = 50, playlist_name: str = "Recent Raves") -> dict:
+        """
+        Aggregates recent 5-star tracks from contributors and updates the playlist for each contributor.
+        Adds new tracks to existing playlist (doesn't replace all), caps at max_songs.
+
+        Returns dict with 'added' count, 'total' count, and 'tracks' list.
+        """
+        logger.info(f"Updating '{playlist_name}' from contributors: {contributors}")
+
+        all_rated_tracks = []
+        track_users = {}  # Map ratingKey to username who rated it
+
+        # 1. Collect 5-star tracks from each contributor
+        for username in contributors:
+            try:
+                user_plex = self.plex.switchUser(username)
+                music_libs = [lib for lib in user_plex.library.sections() if lib.type == 'artist']
+
+                user_tracks = []
+                for lib in music_libs:
+                    # Plex API: 5 stars = 10.0, use 9.9 to catch floating point
+                    results = lib.search(libtype='track', filters={'userRating>>': 9.9})
+                    for track in results:
+                        if hasattr(track, 'lastRatedAt') and track.lastRatedAt:
+                            user_tracks.append(track)
+                            track_users[track.ratingKey] = username
+
+                logger.info(f"Fetched {len(user_tracks)} 5-star tracks for {username}")
+                all_rated_tracks.extend(user_tracks)
+
+            except Exception as e:
+                logger.warning(f"Could not fetch ratings for user '{username}': {e}")
+
+        if not all_rated_tracks:
+            logger.warning("No 5-star tracks found across all contributors.")
+            return {'added': 0, 'total': 0, 'tracks': []}
+
+        # 2. Sort by lastRatedAt (descending) and deduplicate
+        all_rated_tracks.sort(key=lambda t: t.lastRatedAt, reverse=True)
+
+        unique_tracks = []
+        seen_keys = set()
+
+        for track in all_rated_tracks:
+            if track.ratingKey not in seen_keys:
+                unique_tracks.append(track)
+                seen_keys.add(track.ratingKey)
+                if len(unique_tracks) >= max_songs:
+                    break
+
+        logger.info(f"Compiled top {len(unique_tracks)} unique 5-star tracks.")
+
+        if not unique_tracks:
+            return {'added': 0, 'total': 0, 'tracks': []}
+
+        # Build track info list for response
+        track_list = []
+        for track in unique_tracks:
+            track_list.append({
+                'title': track.title,
+                'artist': track.grandparentTitle or track.originalTitle or 'Unknown',
+                'user': track_users.get(track.ratingKey, 'Unknown'),
+                'rated_at': track.lastRatedAt.strftime('%m/%d') if track.lastRatedAt else ''
+            })
+
+        # 3. Update playlist for each contributor (not all users)
+        total_added = 0
+
+        for username in contributors:
+            try:
+                user_plex = self.plex.switchUser(username)
+
+                # Find existing playlist
+                playlist = None
+                for pl in user_plex.playlists():
+                    if pl.title == playlist_name:
+                        playlist = pl
+                        break
+
+                if playlist:
+                    # Get existing track keys
+                    existing_keys = {item.ratingKey for item in playlist.items()}
+
+                    # Find new tracks to add
+                    new_tracks = [t for t in unique_tracks if t.ratingKey not in existing_keys]
+
+                    if new_tracks:
+                        logger.info(f"Adding {len(new_tracks)} new tracks to '{playlist_name}' for {username}")
+                        playlist.addItems(new_tracks)
+                        total_added += len(new_tracks)
+
+                        # Trim to max_songs if needed (remove from end = oldest)
+                        current_items = playlist.items()
+                        if len(current_items) > max_songs:
+                            items_to_remove = current_items[max_songs:]
+                            playlist.removeItems(items_to_remove)
+                            logger.info(f"Trimmed playlist to {max_songs} tracks for {username}")
+                    else:
+                        logger.info(f"No new tracks to add for {username}")
+                else:
+                    # Create new playlist with all tracks
+                    logger.info(f"Creating '{playlist_name}' for {username} with {len(unique_tracks)} tracks")
+                    user_plex.createPlaylist(playlist_name, items=unique_tracks)
+                    total_added += len(unique_tracks)
+
+            except Exception as e:
+                logger.error(f"Failed to update playlist for {username}: {e}")
+
+        return {'added': total_added, 'total': len(unique_tracks), 'tracks': track_list}
+
+    def sync_jam_jar(self, members: list[str], playlist_name: str = "Jam Jar") -> dict:
+        """
+        Syncs the Jam Jar playlist across all members.
+        Merges all tracks (union), deduplicates, sorts by addedAt, pushes to all members.
+
+        Returns dict with 'total' count and 'tracks' list.
+        """
+        logger.info(f"Syncing '{playlist_name}' across members: {members}")
+
+        all_tracks = []
+        track_info = {}  # ratingKey -> {track, addedAt, addedBy}
+
+        # 1. Collect tracks from all members' Jam Jar playlists
+        for username in members:
+            try:
+                user_plex = self.plex.switchUser(username)
+
+                # Find Jam Jar playlist
+                playlist = None
+                for pl in user_plex.playlists():
+                    if pl.title == playlist_name:
+                        playlist = pl
+                        break
+
+                if playlist:
+                    items = playlist.items()
+                    logger.info(f"Found {len(items)} tracks in '{playlist_name}' for {username}")
+
+                    for item in items:
+                        key = item.ratingKey
+                        # Track the earliest addedAt (who added it first)
+                        if key not in track_info:
+                            track_info[key] = {
+                                'track': item,
+                                'added_at': item.addedAt if hasattr(item, 'addedAt') else None,
+                                'added_by': username,
+                                'title': item.title,
+                                'artist': item.grandparentTitle or item.originalTitle or 'Unknown'
+                            }
+                        else:
+                            # Keep the earlier addedAt
+                            existing = track_info[key]
+                            if item.addedAt and (not existing['added_at'] or item.addedAt < existing['added_at']):
+                                track_info[key]['added_at'] = item.addedAt
+                                track_info[key]['added_by'] = username
+                else:
+                    logger.info(f"No '{playlist_name}' playlist found for {username}, will create")
+
+            except Exception as e:
+                logger.warning(f"Could not access playlist for user '{username}': {e}")
+
+        if not track_info:
+            logger.info("No tracks found in any Jam Jar playlist.")
+            # Still create empty playlists for everyone
+            for username in members:
+                try:
+                    user_plex = self.plex.switchUser(username)
+                    existing = None
+                    for pl in user_plex.playlists():
+                        if pl.title == playlist_name:
+                            existing = pl
+                            break
+                    if not existing:
+                        # Can't create empty playlist, need at least one item
+                        logger.info(f"No tracks to create '{playlist_name}' for {username}")
+                except Exception as e:
+                    logger.warning(f"Could not create playlist for {username}: {e}")
+
+            return {'total': 0, 'tracks': []}
+
+        # 2. Sort by addedAt (newest first)
+        sorted_tracks = sorted(
+            track_info.values(),
+            key=lambda x: x['added_at'] if x['added_at'] else datetime.min,
+            reverse=True
+        )
+
+        # Build track list for response
+        track_list = []
+        tracks_to_sync = []
+        for t in sorted_tracks:
+            tracks_to_sync.append(t['track'])
+            track_list.append({
+                'title': t['title'],
+                'artist': t['artist'],
+                'user': t['added_by'],
+                'added_at': t['added_at'].strftime('%m/%d') if t['added_at'] else ''
+            })
+
+        logger.info(f"Merged Jam Jar has {len(tracks_to_sync)} unique tracks")
+
+        # 3. Push merged list to all members
+        for username in members:
+            try:
+                user_plex = self.plex.switchUser(username)
+
+                # Find or create playlist
+                playlist = None
+                for pl in user_plex.playlists():
+                    if pl.title == playlist_name:
+                        playlist = pl
+                        break
+
+                if playlist:
+                    # Clear and repopulate
+                    current_items = playlist.items()
+                    if current_items:
+                        playlist.removeItems(current_items)
+                    playlist.addItems(tracks_to_sync)
+                    logger.info(f"Updated '{playlist_name}' for {username} with {len(tracks_to_sync)} tracks")
+                else:
+                    # Create new playlist
+                    user_plex.createPlaylist(playlist_name, items=tracks_to_sync)
+                    logger.info(f"Created '{playlist_name}' for {username} with {len(tracks_to_sync)} tracks")
+
+            except Exception as e:
+                logger.error(f"Failed to sync playlist for {username}: {e}")
+
+        return {'total': len(tracks_to_sync), 'tracks': track_list}

@@ -13,6 +13,10 @@ Prefix: `!alex`
 - `sync_top` - sync "Top Rated" playlist
 - `enrich "Album"` - add MusicBrainz credits
 
+## Playlists
+- `recent-raves update` - sync shared "Recent Raves" playlist with latest 5-star tracks from contributors (WHS.IV, jac7k, rakbarut, Casey Stewart). Adds new tracks, caps at 50.
+- `jam-jar sync` - sync collaborative "Jam Jar" playlist across members (WHS.IV, jac7k, rakbarut, Casey Stewart). Merges all tracks, deduplicates, sorted by date added. Removals sync when track is removed from all members' playlists.
+
 ## AI Remix
 Stems: `bass`, `drums`, `vocals`, `other`
 
