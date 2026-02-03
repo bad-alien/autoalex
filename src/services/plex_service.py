@@ -2,6 +2,7 @@ import logging
 import os
 import requests
 import musicbrainzngs
+from datetime import datetime, timedelta
 from PIL import Image
 from io import BytesIO
 from clients import clients
@@ -353,3 +354,154 @@ class PlexService:
         except Exception as e:
             logger.error(f"Error enriching album: {e}")
             return None
+
+    def get_recently_added(self, days: int = 7) -> dict:
+        """
+        Get recently added movies, TV shows, and music from Plex.
+
+        Returns dict with:
+        - movies: list of movie items with size and metadata
+        - shows: list of show items with size and metadata
+        - music: list of music items (albums/tracks) with size and metadata
+        """
+        cutoff = datetime.now() - timedelta(days=days)
+        results = {"movies": [], "shows": [], "music": []}
+
+        # Get movie, TV, and music libraries
+        movie_libs = [lib for lib in self.plex.library.sections() if lib.type == 'movie']
+        tv_libs = [lib for lib in self.plex.library.sections() if lib.type == 'show']
+        music_libs = [lib for lib in self.plex.library.sections() if lib.type == 'artist']
+
+        # Process movies - use high limit to get all recent items
+        for lib in movie_libs:
+            try:
+                recent = lib.recentlyAdded(maxresults=2000)
+                for item in recent:
+                    if item.addedAt and item.addedAt >= cutoff:
+                        size_bytes = self._get_item_size(item)
+                        tmdb_id = self._get_tmdb_id(item)
+                        results["movies"].append({
+                            "title": item.title,
+                            "year": item.year,
+                            "added_at": item.addedAt,
+                            "size_bytes": size_bytes,
+                            "tmdb_id": tmdb_id,
+                            "rating_key": item.ratingKey
+                        })
+            except Exception as e:
+                logger.warning(f"Error getting recently added from {lib.title}: {e}")
+
+        # Process TV shows - use searchEpisodes as recentlyAdded returns shows not episodes
+        # Cache TMDB IDs by show rating key to avoid repeated API calls
+        show_tmdb_cache = {}
+        for lib in tv_libs:
+            try:
+                episodes = lib.searchEpisodes(sort='addedAt:desc', limit=5000)
+                for item in episodes:
+                    if item.addedAt and item.addedAt >= cutoff:
+                        show_key = item.grandparentRatingKey if hasattr(item, 'grandparentRatingKey') else item.ratingKey
+                        show_title = item.grandparentTitle if hasattr(item, 'grandparentTitle') else item.title
+
+                        size_bytes = self._get_item_size(item)
+
+                        # Use cached TMDB ID if available
+                        if show_key not in show_tmdb_cache:
+                            try:
+                                show_tmdb_cache[show_key] = self._get_show_tmdb_id(item)
+                            except Exception:
+                                show_tmdb_cache[show_key] = None
+                        tmdb_id = show_tmdb_cache[show_key]
+
+                        results["shows"].append({
+                            "title": show_title,
+                            "episode_title": item.title if hasattr(item, 'grandparentTitle') else None,
+                            "added_at": item.addedAt,
+                            "size_bytes": size_bytes,
+                            "tmdb_id": tmdb_id,
+                            "rating_key": show_key
+                        })
+            except Exception as e:
+                logger.warning(f"Error getting recently added from {lib.title}: {e}")
+
+        # Process music - get albums for count, tracks for total size
+        for lib in music_libs:
+            try:
+                # Get albums for counting
+                albums = lib.searchAlbums(sort='addedAt:desc', limit=5000)
+                for album in albums:
+                    if album.addedAt and album.addedAt >= cutoff:
+                        artist_name = album.parentTitle if hasattr(album, 'parentTitle') else "Unknown Artist"
+                        results["music"].append({
+                            "title": album.title,
+                            "artist": artist_name,
+                            "year": album.year,
+                            "added_at": album.addedAt,
+                            "size_bytes": 0,  # Size calculated separately via tracks
+                            "rating_key": album.ratingKey
+                        })
+            except Exception as e:
+                logger.warning(f"Error getting recently added albums from {lib.title}: {e}")
+
+            # Get total music size by querying tracks directly (much faster)
+            try:
+                tracks = lib.searchTracks(sort='addedAt:desc', limit=10000)
+                music_size = 0
+                for track in tracks:
+                    if track.addedAt and track.addedAt >= cutoff:
+                        music_size += self._get_item_size(track)
+                results["music_total_size"] = results.get("music_total_size", 0) + music_size
+            except Exception as e:
+                logger.warning(f"Error calculating music size from {lib.title}: {e}")
+
+        return results
+
+    def _get_item_size(self, item) -> int:
+        """Get total file size for a Plex item in bytes."""
+        try:
+            total_size = 0
+            for media in item.media:
+                for part in media.parts:
+                    if part.size:
+                        total_size += part.size
+            return total_size
+        except Exception:
+            return 0
+
+    def _get_tmdb_id(self, item) -> int | None:
+        """Extract TMDB ID from a Plex item's guids."""
+        try:
+            for guid in item.guids:
+                if guid.id.startswith("tmdb://"):
+                    return int(guid.id.replace("tmdb://", ""))
+        except Exception:
+            pass
+        return None
+
+    def _get_show_tmdb_id(self, item) -> int | None:
+        """Extract TMDB ID for a TV show from an episode."""
+        try:
+            # Try to get the show object if we have an episode
+            if hasattr(item, 'grandparentRatingKey'):
+                # This is an episode, try to fetch show's guids
+                show = self.plex.fetchItem(item.grandparentRatingKey)
+                for guid in show.guids:
+                    if guid.id.startswith("tmdb://"):
+                        return int(guid.id.replace("tmdb://", ""))
+            else:
+                # This is the show itself
+                for guid in item.guids:
+                    if guid.id.startswith("tmdb://"):
+                        return int(guid.id.replace("tmdb://", ""))
+        except Exception:
+            pass
+        return None
+
+    def _get_album_size(self, album) -> int:
+        """Get total file size for all tracks in an album."""
+        try:
+            total_size = 0
+            for track in album.tracks():
+                total_size += self._get_item_size(track)
+            return total_size
+        except Exception:
+            return 0

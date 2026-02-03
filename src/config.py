@@ -22,6 +22,10 @@ class Config:
     PLEX_POLL_INTERVAL = int(os.getenv("PLEX_POLL_INTERVAL", "30"))
     PLEX_ALERT_COOLDOWN = int(os.getenv("PLEX_ALERT_COOLDOWN", "1800"))
 
+    # Overseerr Configuration (optional, for tracking requesters)
+    OVERSEERR_URL = os.getenv("OVERSEERR_URL")
+    OVERSEERR_API_KEY = os.getenv("OVERSEERR_API_KEY")
+
     @staticmethod
     def validate():
         missing = []

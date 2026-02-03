@@ -7,6 +7,7 @@ Prefix: `!alex`
 - `status` - Plex health check (shows logs if down)
 - `completion "Artist" [user]` - discography completion %
 - `compare "Artist" user1 user2` - listening battle
+- `added [days] [user]` - recently added media with size breakdown (default: 7 days)
 
 ## Library
 - `sync_top` - sync "Top Rated" playlist

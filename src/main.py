@@ -9,6 +9,7 @@ from services.tautulli_service import TautulliService
 from services.plex_service import PlexService
 from services.remix_service import RemixService, VALID_STEMS, DEFAULT_GAIN_DB, MAX_GAIN_DB
 from services.plex_monitor import PlexMonitor
+from services.overseerr_service import OverseerrService
 
 # Setup Logging
 logging.basicConfig(
@@ -28,6 +29,7 @@ except ValueError as e:
 tautulli_service = TautulliService()
 plex_service = PlexService()
 remix_service = RemixService()
+overseerr_service = OverseerrService()
 plex_monitor = PlexMonitor(
     plex_url=Config.PLEX_URL,
     container_name=Config.PLEX_CONTAINER_NAME,
@@ -519,6 +521,159 @@ async def reduce(ctx, *, args: str):
         await _process_remix(ctx, stem, gain_db, song_title, "Reduce")
     except ValueError as e:
         await ctx.send(str(e))
+
+
+def format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable size."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 ** 2:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 ** 3:
+        return f"{size_bytes / (1024 ** 2):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 ** 3):.1f} GB"
+
+
+@bot.command()
+async def added(ctx, days: int = 7, user: str = None):
+    """
+    Shows media added to Plex in the last N days, with size breakdown.
+    Optionally filter by Overseerr requester.
+
+    Usage: !alex added 7              # All additions in last 7 days
+           !alex added 30 john        # John's requests in last 30 days
+    """
+    await ctx.typing()
+
+    try:
+        # Get recently added from Plex
+        recent = plex_service.get_recently_added(days)
+    except RuntimeError:
+        await ctx.send("Plex is not connected.")
+        return
+
+    movies = recent["movies"]
+    shows = recent["shows"]
+    music = recent["music"]
+
+    if not movies and not shows and not music:
+        await ctx.send(f"No media added in the last {days} days.")
+        return
+
+    # Get Overseerr requests for requester tracking
+    overseerr_requests = []
+    tmdb_lookup = {}
+    if overseerr_service.is_configured():
+        overseerr_requests = await overseerr_service.get_requests(days)
+        tmdb_lookup = overseerr_service.build_tmdb_lookup(overseerr_requests)
+
+    # Aggregate shows by unique show (not per-episode)
+    show_aggregates = {}
+    for show in shows:
+        key = show["rating_key"]
+        if key not in show_aggregates:
+            show_aggregates[key] = {
+                "title": show["title"],
+                "size_bytes": 0,
+                "tmdb_id": show["tmdb_id"],
+                "episode_count": 0
+            }
+        show_aggregates[key]["size_bytes"] += show["size_bytes"]
+        show_aggregates[key]["episode_count"] += 1
+
+    aggregated_shows = list(show_aggregates.values())
+
+    # Match items with requesters
+    def get_requester(tmdb_id: int, media_type: str) -> str:
+        if not tmdb_id:
+            return "Manual/Admin"
+        key = (media_type, tmdb_id)
+        return tmdb_lookup.get(key, "Manual/Admin")
+
+    # Attach requesters
+    for movie in movies:
+        movie["requester"] = get_requester(movie["tmdb_id"], "movie")
+
+    for show in aggregated_shows:
+        show["requester"] = get_requester(show["tmdb_id"], "tv")
+
+    # Filter by user if specified
+    if user:
+        movies = [m for m in movies if m["requester"].lower() == user.lower()]
+        aggregated_shows = [s for s in aggregated_shows if s["requester"].lower() == user.lower()]
+
+        if not movies and not aggregated_shows:
+            await ctx.send(f"No media found for user '{user}' in the last {days} days.")
+            return
+
+    # Calculate totals
+    movie_count = len(movies)
+    movie_size = sum(m["size_bytes"] for m in movies)
+    # For TV, count episodes from aggregated shows (respects user filter)
+    episode_count = sum(s["episode_count"] for s in aggregated_shows)
+    show_size = sum(s["size_bytes"] for s in aggregated_shows)
+    music_count = len(music)
+    music_size = recent.get("music_total_size", 0)
+    total_count = movie_count + episode_count + music_count
+    total_size = movie_size + show_size + music_size
+
+    # Aggregate by requester
+    requester_stats = {}
+    for movie in movies:
+        req = movie["requester"]
+        if req not in requester_stats:
+            requester_stats[req] = {"count": 0, "size": 0}
+        requester_stats[req]["count"] += 1
+        requester_stats[req]["size"] += movie["size_bytes"]
+
+    for show in aggregated_shows:
+        req = show["requester"]
+        if req not in requester_stats:
+            requester_stats[req] = {"count": 0, "size": 0}
+        requester_stats[req]["count"] += show["episode_count"]  # Count episodes, not shows
+        requester_stats[req]["size"] += show["size_bytes"]
+
+    # Sort requesters by size descending
+    sorted_requesters = sorted(
+        requester_stats.items(),
+        key=lambda x: x[1]["size"],
+        reverse=True
+    )
+
+    # Build embed
+    title = f"Library Additions (Last {days} Days)"
+    if user:
+        title += f" - {user}"
+
+    embed = discord.Embed(title=title, color=discord.Color.blue())
+
+    # Summary stats
+    summary = f"**Movies:** {movie_count} ({format_size(movie_size)})\n"
+    summary += f"**TV Episodes:** {episode_count} ({format_size(show_size)})\n"
+    summary += f"**Music:** {music_count} albums ({format_size(music_size)})\n"
+    summary += f"**Total:** {total_count} items ({format_size(total_size)})"
+    embed.add_field(name="Summary", value=summary, inline=False)
+
+    # Top requesters (only if not filtered by user and we have multiple)
+    if not user and len(sorted_requesters) > 1:
+        requester_lines = []
+        for req_name, stats in sorted_requesters[:5]:  # Top 5
+            requester_lines.append(
+                f"• {req_name}: {stats['count']} items ({format_size(stats['size'])})"
+            )
+        if requester_lines:
+            embed.add_field(
+                name="Top Requesters",
+                value="\n".join(requester_lines),
+                inline=False
+            )
+
+    # Note if Overseerr not configured
+    if not overseerr_service.is_configured():
+        embed.set_footer(text="Overseerr not configured - requester data unavailable")
+
+    await ctx.send(embed=embed)
 
 
 if __name__ == "__main__":
