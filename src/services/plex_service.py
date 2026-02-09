@@ -735,3 +735,129 @@ class PlexService:
                 logger.error(f"Failed to sync playlist for {username}: {e}")
 
         return {'total': len(tracks_to_sync), 'tracks': track_list}
+
+    def sync_staff_picks(self, curators: list[str], playlist_name: str = "Staff Picks") -> dict:
+        """
+        Syncs the Staff Picks playlist from curators to ALL users.
+        Merges curator playlists, deduplicates, and pushes to everyone.
+
+        Returns dict with 'total' count, 'tracks' list, and 'users_updated' count.
+        """
+        logger.info(f"Syncing '{playlist_name}' from curators: {curators}")
+
+        track_info = {}  # ratingKey -> {track, addedAt, addedBy}
+
+        # 1. Collect tracks from curators' Staff Picks playlists
+        for username in curators:
+            try:
+                user_plex = self.plex.switchUser(username)
+
+                playlist = None
+                for pl in user_plex.playlists():
+                    if pl.title == playlist_name:
+                        playlist = pl
+                        break
+
+                if playlist:
+                    items = playlist.items()
+                    logger.info(f"Found {len(items)} tracks in '{playlist_name}' for curator {username}")
+
+                    for item in items:
+                        key = item.ratingKey
+                        if key not in track_info:
+                            track_info[key] = {
+                                'track': item,
+                                'added_at': item.addedAt if hasattr(item, 'addedAt') else None,
+                                'added_by': username,
+                                'title': item.title,
+                                'artist': item.grandparentTitle or item.originalTitle or 'Unknown'
+                            }
+                        else:
+                            existing = track_info[key]
+                            if item.addedAt and (not existing['added_at'] or item.addedAt < existing['added_at']):
+                                track_info[key]['added_at'] = item.addedAt
+                                track_info[key]['added_by'] = username
+                else:
+                    logger.info(f"No '{playlist_name}' playlist found for curator {username}")
+
+            except Exception as e:
+                logger.warning(f"Could not access playlist for curator '{username}': {e}")
+
+        if not track_info:
+            logger.info("No tracks found in any curator's Staff Picks.")
+            return {'total': 0, 'tracks': [], 'users_updated': 0}
+
+        # 2. Sort by addedAt (newest first)
+        sorted_tracks = sorted(
+            track_info.values(),
+            key=lambda x: x['added_at'] if x['added_at'] else datetime.min,
+            reverse=True
+        )
+
+        track_list = []
+        tracks_to_sync = []
+        for t in sorted_tracks:
+            tracks_to_sync.append(t['track'])
+            track_list.append({
+                'title': t['title'],
+                'artist': t['artist'],
+                'user': t['added_by'],
+                'added_at': t['added_at'].strftime('%m/%d') if t['added_at'] else ''
+            })
+
+        logger.info(f"Merged Staff Picks has {len(tracks_to_sync)} unique tracks")
+
+        # 3. Get all users (Home users + admin)
+        account = self.plex.myPlexAccount()
+        all_users = account.users()
+        home_users = [u for u in all_users if getattr(u, 'home', False)]
+
+        users_updated = 0
+
+        # Update admin's playlist first
+        try:
+            playlist = None
+            for pl in self.plex.playlists():
+                if pl.title == playlist_name:
+                    playlist = pl
+                    break
+
+            if playlist:
+                current_items = playlist.items()
+                if current_items:
+                    playlist.removeItems(current_items)
+                playlist.addItems(tracks_to_sync)
+            else:
+                self.plex.createPlaylist(playlist_name, items=tracks_to_sync)
+
+            users_updated += 1
+            logger.info(f"Updated '{playlist_name}' for admin")
+        except Exception as e:
+            logger.error(f"Failed to update playlist for admin: {e}")
+
+        # Update all home users
+        for user in home_users:
+            try:
+                user_plex = self.plex.switchUser(user.title)
+
+                playlist = None
+                for pl in user_plex.playlists():
+                    if pl.title == playlist_name:
+                        playlist = pl
+                        break
+
+                if playlist:
+                    current_items = playlist.items()
+                    if current_items:
+                        playlist.removeItems(current_items)
+                    playlist.addItems(tracks_to_sync)
+                else:
+                    user_plex.createPlaylist(playlist_name, items=tracks_to_sync)
+
+                users_updated += 1
+                logger.info(f"Updated '{playlist_name}' for {user.title}")
+
+            except Exception as e:
+                logger.error(f"Failed to update playlist for {user.title}: {e}")
+
+        return {'total': len(tracks_to_sync), 'tracks': track_list, 'users_updated': users_updated}

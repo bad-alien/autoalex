@@ -740,6 +740,66 @@ async def recent_raves_update(ctx):
         await ctx.send(f"❌ Update failed: {e}")
 
 
+@bot.group(name="staff-picks", invoke_without_command=True)
+async def staff_picks(ctx):
+    """
+    Manages the 'Staff Picks' playlist for all users.
+    Subcommands: sync
+    """
+    await ctx.send("Usage: `!alex staff-picks sync`")
+
+@staff_picks.command(name="sync")
+async def staff_picks_sync(ctx):
+    """
+    Syncs the 'Staff Picks' playlist to all users.
+    Curators (WHS.IV, jac7k, rakbarut, Casey Stewart) add tracks,
+    which then sync to everyone's account.
+    """
+    await ctx.typing()
+
+    curators = ["WHS.IV", "jac7k", "rakbarut", "Casey Stewart"]
+
+    try:
+        result = await asyncio.to_thread(
+            plex_service.sync_staff_picks,
+            curators=curators
+        )
+
+        if result['total'] == 0:
+            await ctx.send("Staff Picks is empty. Curators need to add tracks first.")
+            return
+
+        embed = discord.Embed(
+            title="Staff Picks Synced",
+            description=f"Pushed to {result['users_updated']} users",
+            color=discord.Color.gold()
+        )
+
+        track_lines = []
+        for i, t in enumerate(result['tracks'], 1):
+            title_str = t['title'][:30] + '..' if len(t['title']) > 32 else t['title']
+            artist_str = t['artist'][:18] + '..' if len(t['artist']) > 20 else t['artist']
+            line = f"`{i:2}.` **{title_str}** - {artist_str} ({t['user'][:8]})"
+            track_lines.append(line)
+
+        chunk_size = 10
+        for chunk_idx in range(0, min(len(track_lines), 50), chunk_size):
+            chunk = track_lines[chunk_idx:chunk_idx + chunk_size]
+            field_name = f"Tracks {chunk_idx + 1}-{chunk_idx + len(chunk)}"
+            embed.add_field(name=field_name, value="\n".join(chunk), inline=False)
+
+        if len(track_lines) > 50:
+            embed.add_field(name="...", value=f"And {len(track_lines) - 50} more tracks", inline=False)
+
+        embed.set_footer(text=f"{result['total']} tracks total")
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Staff Picks sync failed: {e}")
+        await ctx.send(f"Staff Picks sync failed: {e}")
+
+
 @bot.group(name="jam-jar", invoke_without_command=True)
 async def jam_jar(ctx):
     """
